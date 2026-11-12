@@ -1,0 +1,26 @@
+{
+	"luci-app-anygo": {
+		"description": "Grant access to AnyGo",
+		"read": {
+			"ubus": {
+				"anygo": [ "status", "config_get", "get_logs" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"anygo": [
+					"config_set",
+					"pair_import",
+					"pair_usb",
+					"pair_delete",
+					"connect",
+					"disconnect",
+					"set_location",
+					"clear_location",
+					"route_start",
+					"route_control"
+				]
+			}
+		}
+	}
+}

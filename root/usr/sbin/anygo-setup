@@ -1,0 +1,99 @@
+#!/bin/sh
+# Provision the ARM64/musl runtime in /opt, then start it under procd.
+set -eu
+
+NATIVE=/opt/anygo/native
+SHARE=${ANYGO_SHARE:-/usr/share/anygo}
+PYTHON="$NATIVE/python-3.12.16"
+PYTHON_RELEASE='https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-aarch64-unknown-linux-musl-install_only_stripped.tar.gz'
+PYTHON_SHA256='64bb304e59d5d6ed5eaae24e95e743a2420a8897d2f6c854b1438ff9cb47e432'
+USB_FEED='https://downloads.openwrt.org/releases/24.10.1/packages/aarch64_generic'
+PIP_INDEX=${ANYGO_PIP_INDEX:-https://pypi.org/simple}
+
+case "${1:-}" in
+	''|--prepare) ;;
+	*) echo "Usage: anygo-setup [--prepare]" >&2; exit 2 ;;
+esac
+
+if [ "$(uname -m)" != aarch64 ] || [ ! -e /lib/ld-musl-aarch64.so.1 ]; then
+	echo "The bundled runtime requires ARM64 OpenWrt with musl." >&2
+	exit 1
+fi
+[ -c /dev/net/tun ] || { echo "/dev/net/tun is missing; install kmod-tun." >&2; exit 1; }
+if ! curl --version | grep -qw UnixSockets; then
+	echo "curl with UnixSockets support is required." >&2
+	exit 1
+fi
+
+umask 077
+mkdir -p "$NATIVE"
+exec 9>"$NATIVE/.setup.lock"
+flock -n 9 || { echo "Another AnyGo setup is running." >&2; exit 1; }
+stage=$(mktemp -d "$NATIVE/.install.XXXXXX")
+trap 'rm -r -- "$stage"' EXIT
+trap 'exit 1' HUP INT TERM
+
+fetch() {
+	curl -fsSL --retry 2 --connect-timeout 10 --max-time 300 "$1" -o "$2"
+}
+
+check_sha256() {
+	printf '%s  %s\n' "$1" "$2" | sha256sum -c -
+}
+
+if [ ! -x "$PYTHON/bin/python3.12" ]; then
+	archive="${ANYGO_PYTHON_ARCHIVE:-$stage/python.tar.gz}"
+	if [ -z "${ANYGO_PYTHON_ARCHIVE:-}" ]; then
+		echo "Downloading CPython for ARM64 OpenWrt"
+		fetch "$PYTHON_RELEASE" "$archive"
+	fi
+	check_sha256 "$PYTHON_SHA256" "$archive"
+	tar -xzf "$archive" -C "$stage"
+	"$stage/python/bin/python3.12" -m pip install --disable-pip-version-check \
+		--no-cache-dir --only-binary=:all: --index-url "$PIP_INDEX" \
+		'pymobiledevice3==11.52.1' 'sslpsk-pmd3==1.2.2' 'av==19.0.2' \
+		'fastapi==0.162.5' 'uvicorn==0.54.0'
+	"$stage/python/bin/python3.12" -m pip check
+	mv "$stage/python" "$PYTHON"
+fi
+
+if [ ! -x "$NATIVE/usb/usr/sbin/usbmuxd" ] && [ ! -x /usr/sbin/usbmuxd ]; then
+	mkdir "$stage/usb"
+	while read -r sha package; do
+		if [ -n "${ANYGO_USB_PACKAGE_DIR:-}" ]; then
+			archive="$ANYGO_USB_PACKAGE_DIR/${package##*/}"
+		else
+			archive="$stage/usb.ipk"
+			fetch "$USB_FEED/$package" "$archive"
+		fi
+		check_sha256 "$sha" "$archive"
+		tar -xzf "$archive" -C "$stage" ./data.tar.gz
+		tar -xzf "$stage/data.tar.gz" -C "$stage/usb"
+	done < "$SHARE/native-usb.packages"
+	LD_LIBRARY_PATH="$stage/usb/usr/lib" "$stage/usb/usr/sbin/usbmuxd" --version
+	mv "$stage/usb" "$NATIVE/usb"
+fi
+
+HOME="$stage/data" ANYGO_DATA="$stage/data" "$PYTHON/bin/python3.12" -B -c \
+	'import runpy, sys; runpy.run_path(sys.argv[1])' "$SHARE/anygo_worker.py"
+cp "$SHARE/anygo_worker.py" "$stage/anygo_worker.py"
+mv "$stage/anygo_worker.py" "$NATIVE/anygo_worker.py"
+
+[ "${1:-}" = --prepare ] && exit 0
+
+if /etc/init.d/anygod running; then
+	/etc/init.d/anygod restart
+else
+	/etc/init.d/anygod start
+fi
+for _ in $(seq 1 20); do
+	if curl -fsS --max-time 2 --unix-socket /var/run/anygo/worker.sock http://localhost/api/status >/dev/null 2>&1; then
+		/etc/init.d/anygod enable
+		echo "AnyGo is ready on /var/run/anygo/worker.sock"
+		exit 0
+	fi
+	sleep 1
+done
+
+echo "AnyGo did not start; check logread -e anygod." >&2
+exit 1

@@ -1,0 +1,6 @@
+config anygo 'main'
+	option enabled '1'
+	option amap_key ''
+	option default_speed '1.4'
+	option max_devices '4'
+	option restore_on_stop '1'

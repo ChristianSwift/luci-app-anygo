@@ -1,0 +1,4 @@
+#!/bin/sh
+chmod +x /usr/sbin/anygo-setup /usr/libexec/rpcd/anygo /etc/init.d/anygod 2>/dev/null
+/etc/init.d/anygod enable 2>/dev/null
+exit 0

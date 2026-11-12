@@ -1,0 +1,25 @@
+{
+	"admin/services/anygo": {
+		"title": "AnyGo",
+		"order": 60,
+		"action": { "type": "firstchild" },
+		"depends": {
+			"acl": [ "luci-app-anygo" ]
+		}
+	},
+	"admin/services/anygo/overview": {
+		"title": "概览", "order": 10,
+		"action": { "type": "view", "path": "anygo/overview" },
+		"depends": { "acl": [ "luci-app-anygo" ] }
+	},
+	"admin/services/anygo/settings": {
+		"title": "高级设置", "order": 20,
+		"action": { "type": "view", "path": "anygo/settings" },
+		"depends": { "acl": [ "luci-app-anygo" ] }
+	},
+	"admin/services/anygo/logs": {
+		"title": "运行日志", "order": 30,
+		"action": { "type": "view", "path": "anygo/logs" },
+		"depends": { "acl": [ "luci-app-anygo" ] }
+	}
+}
