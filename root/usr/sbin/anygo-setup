@@ -1,13 +1,10 @@
 #!/bin/sh
-# Provision the ARM64/musl runtime in /opt, then start it under procd.
+# Provision the native musl runtime in /opt, then start it under procd.
 set -eu
 
 NATIVE=/opt/anygo/native
 SHARE=${ANYGO_SHARE:-/usr/share/anygo}
 PYTHON="$NATIVE/python-3.12.16"
-PYTHON_RELEASE='https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-aarch64-unknown-linux-musl-install_only_stripped.tar.gz'
-PYTHON_SHA256='64bb304e59d5d6ed5eaae24e95e743a2420a8897d2f6c854b1438ff9cb47e432'
-USB_FEED='https://downloads.openwrt.org/releases/24.10.1/packages/aarch64_generic'
 PIP_INDEX=${ANYGO_PIP_INDEX:-https://pypi.org/simple}
 
 case "${1:-}" in
@@ -15,10 +12,30 @@ case "${1:-}" in
 	*) echo "Usage: anygo-setup [--prepare]" >&2; exit 2 ;;
 esac
 
-if [ "$(uname -m)" != aarch64 ] || [ ! -e /lib/ld-musl-aarch64.so.1 ]; then
-	echo "The bundled runtime requires ARM64 OpenWrt with musl." >&2
+arch=$(uname -m)
+case "$arch" in
+	aarch64)
+		PYTHON_SHA256='64bb304e59d5d6ed5eaae24e95e743a2420a8897d2f6c854b1438ff9cb47e432'
+		USB_ARCH=aarch64_generic
+		USB_MANIFEST="$SHARE/native-usb.packages"
+		;;
+	x86_64)
+		PYTHON_SHA256='e32685cf248d2f33b249816120774143b4b57578cb30de5b8dba3e54963765c3'
+		USB_ARCH=x86_64
+		USB_MANIFEST="$SHARE/native-usb-x86_64.packages"
+		;;
+	*)
+		echo "Unsupported architecture: $arch. Use ARM64 or x86_64 OpenWrt." >&2
+		exit 1
+		;;
+esac
+if [ ! -e "/lib/ld-musl-$arch.so.1" ]; then
+	echo "The native runtime requires musl for $arch." >&2
 	exit 1
 fi
+PYTHON_RELEASE="https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-$arch-unknown-linux-musl-install_only_stripped.tar.gz"
+USB_FEED="https://downloads.openwrt.org/releases/24.10.1/packages/$USB_ARCH"
+
 [ -c /dev/net/tun ] || { echo "/dev/net/tun is missing; install kmod-tun." >&2; exit 1; }
 if ! curl --version | grep -qw UnixSockets; then
 	echo "curl with UnixSockets support is required." >&2
@@ -44,7 +61,7 @@ check_sha256() {
 if [ ! -x "$PYTHON/bin/python3.12" ]; then
 	archive="${ANYGO_PYTHON_ARCHIVE:-$stage/python.tar.gz}"
 	if [ -z "${ANYGO_PYTHON_ARCHIVE:-}" ]; then
-		echo "Downloading CPython for ARM64 OpenWrt"
+		echo "Downloading CPython for $arch OpenWrt"
 		fetch "$PYTHON_RELEASE" "$archive"
 	fi
 	check_sha256 "$PYTHON_SHA256" "$archive"
@@ -69,7 +86,7 @@ if [ ! -x "$NATIVE/usb/usr/sbin/usbmuxd" ] && [ ! -x /usr/sbin/usbmuxd ]; then
 		check_sha256 "$sha" "$archive"
 		tar -xzf "$archive" -C "$stage" ./data.tar.gz
 		tar -xzf "$stage/data.tar.gz" -C "$stage/usb"
-	done < "$SHARE/native-usb.packages"
+	done < "$USB_MANIFEST"
 	LD_LIBRARY_PATH="$stage/usb/usr/lib" "$stage/usb/usr/sbin/usbmuxd" --version
 	mv "$stage/usb" "$NATIVE/usb"
 fi
