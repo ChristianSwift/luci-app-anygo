@@ -13,10 +13,15 @@ return view.extend({
 
 	load: function() {
 		common.loadStyles();
-		return callGet().catch(function() { return null; });
 	},
 
-	render: function(config) {
+	render: function() {
+		return common.guardWorker(L.bind(function() {
+			return callGet().catch(function() { return null; }).then(L.bind(this.renderPage, this));
+		}, this));
+	},
+
+	renderPage: function(config) {
 		var pageClass = common.themeClass() + ' anygo-settings';
 		var heading = E('div', { class: 'anygo-heading' }, E('h2', {}, '高级设置'));
 		if (!config || config.error || config.detail)

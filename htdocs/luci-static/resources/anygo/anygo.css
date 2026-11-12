@@ -18,6 +18,49 @@
 
 .anygo [hidden] { display: none !important; }
 
+.anygo-worker-guard {
+	position: relative;
+	isolation: isolate;
+}
+
+.anygo-worker-guard:has(.anygo-setup-overlay:not([hidden])) {
+	min-height: clamp(20rem, 62vh, 36rem);
+}
+
+.anygo-setup-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 300;
+	display: grid;
+	place-items: center;
+	padding: 1rem;
+	border-radius: var(--ag-radius);
+	background: color-mix(in srgb, var(--ag-soft) 90%, transparent);
+}
+
+.anygo-setup-panel {
+	box-sizing: border-box;
+	width: min(100%, 28rem);
+	padding: clamp(1.25rem, 4vw, 2rem);
+}
+
+.anygo .anygo-setup-panel h2 {
+	margin: 0 0 .5rem;
+	padding: 0;
+	color: var(--ag-ink);
+	background: none;
+	box-shadow: none;
+	font-size: 1.35rem;
+}
+
+.anygo-setup-panel p {
+	margin: 0;
+	color: var(--ag-muted);
+	overflow-wrap: anywhere;
+}
+
+.anygo-setup-panel button { margin-top: 1rem; }
+
 .anygo-heading {
 	margin: 0 0 1rem;
 }

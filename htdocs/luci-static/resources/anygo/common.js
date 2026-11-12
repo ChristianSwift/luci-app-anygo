@@ -1,7 +1,19 @@
 'use strict';
 'require baseclass';
+'require poll';
+'require rpc';
 
 var darkPreference = window.matchMedia('(prefers-color-scheme: dark)');
+var callSetupStatus = rpc.declare({ object: 'anygo', method: 'setup_status', reject: true });
+var callSetupStart = rpc.declare({ object: 'anygo', method: 'setup_start', reject: true });
+
+var setupMessages = {
+	checking: '正在检查 AnyGo 服务…',
+	required: '初始化完成后即可使用 AnyGo。',
+	running: '正在准备运行环境并启动服务，请稍候。',
+	failed: '初始化失败。可以重试，或查看路由器上的 /var/run/anygo-setup/setup.log。',
+	unavailable: '无法读取 AnyGo 服务状态，正在重试…'
+};
 
 function isDarkTheme() {
 	// Vantage exposes the active palette, including when following the system.
@@ -43,6 +55,96 @@ return baseclass.extend({
 
 	themeClass: function() {
 		return isDarkTheme() ? 'anygo anygo-dark' : 'anygo';
+	},
+
+	guardWorker: function(renderPage) {
+		var state = 'checking';
+		var checking = false;
+		var starting = false;
+		var attempts = 0;
+		var rendered = false;
+		var startError = '';
+		var content = E('div', { inert: '', tabindex: '-1' });
+		var title = E('h2', { id: 'anygo-setup-title' }, '初始化 AnyGo');
+		var message = E('p', { role: 'status' }, setupMessages.checking);
+		var start = this.button('初始化 AnyGo', function() {
+			attempts++;
+			starting = true;
+			startError = '';
+			updateOverlay();
+			callSetupStart().then(function(res) {
+				if (!res || (res.state !== 'running' && res.state !== 'ready'))
+					throw new Error('Unable to start setup');
+				state = res.state === 'ready' ? 'checking' : 'running';
+			}).catch(function() {
+				startError = '无法启动初始化。请确认当前账号有初始化权限后重试。';
+			}).finally(function() {
+				starting = false;
+				updateOverlay();
+				refresh();
+			});
+		}, { class: 'anygo-button anygo-button-primary', hidden: '' });
+		var overlay = E('div', {
+			class: 'anygo-setup-overlay', role: 'region', 'aria-labelledby': 'anygo-setup-title', tabindex: '-1'
+		}, E('section', { class: 'anygo-panel anygo-setup-panel' }, [ title, message, start ]));
+		var root = E('div', { class: this.themeClass() + ' anygo-worker-guard' }, [ content, overlay ]);
+
+		function updateOverlay() {
+			var ready = state === 'ready';
+			var focus = document.activeElement;
+			content.inert = !ready;
+			overlay.hidden = ready;
+			if (ready) {
+				if (overlay.contains(focus))
+					content.focus();
+				return;
+			}
+			title.textContent = starting || state === 'running' ? '正在初始化 AnyGo' : '初始化 AnyGo';
+			message.textContent = startError || setupMessages[starting ? 'running' : state];
+			start.hidden = state !== 'required' && state !== 'failed';
+			start.disabled = starting;
+			start.textContent = state === 'failed' ? '重试初始化' : '初始化 AnyGo';
+			if (content.contains(focus) || (focus === start && start.hidden))
+				overlay.focus();
+		}
+
+		function refresh() {
+			if (checking || starting)
+				return Promise.resolve();
+			checking = true;
+			var attempt = attempts;
+			return callSetupStatus().then(function(res) {
+				if (attempt !== attempts)
+					return;
+				var next = res && res.state;
+				if (next === 'ready' && !rendered) {
+					return Promise.resolve(renderPage()).then(function(page) {
+						content.replaceChildren(page);
+						rendered = true;
+						state = 'ready';
+						updateOverlay();
+					});
+				}
+				if (next !== state)
+					startError = '';
+				state = next === 'ready' || setupMessages[next] ? next : 'unavailable';
+				updateOverlay();
+			}).catch(function() {
+				if (attempt === attempts) {
+					startError = '';
+					state = 'unavailable';
+					updateOverlay();
+				}
+			}).finally(function() {
+				checking = false;
+				if (attempt !== attempts && !starting)
+					refresh();
+			});
+		}
+
+		poll.add(refresh, 3);
+		refresh();
+		return root;
 	},
 
 	button: function(label, click, attrs) {

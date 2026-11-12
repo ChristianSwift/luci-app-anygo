@@ -16,6 +16,10 @@ return view.extend({
 	},
 
 	render: function() {
+		return common.guardWorker(L.bind(this.renderPage, this));
+	},
+
+	renderPage: function() {
 		var status = E('span', { class: 'anygo-muted', role: 'status' }, '加载中…');
 		var rows = E('div', { id: 'anygo-logs', class: 'anygo-log-scroll', tabindex: '0', 'aria-label': '日志列表' });
 		var fingerprint;

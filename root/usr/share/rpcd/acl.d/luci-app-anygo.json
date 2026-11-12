@@ -3,7 +3,7 @@
 		"description": "Grant access to AnyGo",
 		"read": {
 			"ubus": {
-				"anygo": [ "status", "config_get", "get_logs" ]
+				"anygo": [ "status", "setup_status", "config_get", "get_logs" ]
 			}
 		},
 		"write": {
@@ -20,6 +20,14 @@
 					"route_start",
 					"route_control"
 				]
+			}
+		}
+	},
+	"luci-app-anygo-setup": {
+		"description": "Allow initialization of the AnyGo runtime",
+		"write": {
+			"ubus": {
+				"anygo": [ "setup_start" ]
 			}
 		}
 	}

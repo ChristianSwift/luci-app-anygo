@@ -110,13 +110,18 @@ return view.extend({
 
 	load: function() {
 		common.loadStyles();
-		return Promise.all([
-			callStatus().catch(function() { return null; }),
-			callConfigGet().catch(function() { return null; })
-		]);
 	},
 
-	render: function(data) {
+	render: function() {
+		return common.guardWorker(L.bind(function() {
+			return Promise.all([
+				callStatus().catch(function() { return null; }),
+				callConfigGet().catch(function() { return null; })
+			]).then(L.bind(this.renderPage, this));
+		}, this));
+	},
+
+	renderPage: function(data) {
 		var status = data[0] || {};
 		var config = data[1] && !data[1].error ? data[1] : status.config || {};
 		this.state = {

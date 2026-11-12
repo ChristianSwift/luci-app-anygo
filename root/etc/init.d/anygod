@@ -14,14 +14,13 @@ start_service() {
 	local usb="$NATIVE/usb/usr/sbin/usbmuxd"
 	local usb_socket=/var/run/usbmuxd
 
-	# 首次安装尚未 anygo-setup 时不要让 start 失败，否则 opkg/LuCI 会把配置阶段标成错误
 	if [ ! -x "$python" ] || [ ! -r "$worker" ]; then
 		logger -t anygo "native runtime missing; run anygo-setup"
-		return 0
+		return 1
 	fi
 	[ -c /dev/net/tun ] || {
 		logger -t anygo "/dev/net/tun is unavailable; install kmod-tun"
-		return 0
+		return 1
 	}
 
 	umask 077

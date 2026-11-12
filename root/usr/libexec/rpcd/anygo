@@ -4,6 +4,7 @@
 
 BASE="http://localhost"
 SOCKET="${ANYGO_SOCKET:-/var/run/anygo/worker.sock}"
+SETUP_DIR=/var/run/anygo-setup
 
 request() {
 	curl -sS --noproxy '*' --max-time 40 --unix-socket "$SOCKET" "$@"
@@ -17,11 +18,58 @@ json_or_error() {
 	fi
 }
 
+worker_ready() {
+	local status
+	status=$(request --fail --max-time 2 "$BASE/api/status" 2>/dev/null) || return 1
+	[ -n "$(printf '%s' "$status" | jsonfilter -e '@.version' 2>/dev/null)" ]
+}
+
+setup_running() (
+	[ -f "$SETUP_DIR/lock" ] || return 1
+	exec 8<"$SETUP_DIR/lock"
+	! flock -n 8
+)
+
+setup_status() {
+	if setup_running; then
+		printf '{"state":"running"}'
+	elif worker_ready; then
+		printf '{"state":"ready"}'
+	elif [ -f "$SETUP_DIR/failed" ]; then
+		printf '{"state":"failed"}'
+	else
+		printf '{"state":"required"}'
+	fi
+}
+
+setup_start() (
+	umask 077
+	mkdir -p "$SETUP_DIR" || return 1
+	exec 8>"$SETUP_DIR/lock"
+	if ! flock -n 8; then
+		printf '{"state":"running"}'
+		return
+	fi
+	if worker_ready; then
+		printf '{"state":"ready"}'
+		return
+	fi
+	: > "$SETUP_DIR/setup.log" || return 1
+	rm -f "$SETUP_DIR/failed" || return 1
+	# Keep the lock in the background shell and close the rpcd pipes.
+	(
+		/usr/sbin/anygo-setup || touch "$SETUP_DIR/failed"
+	) </dev/null >>"$SETUP_DIR/setup.log" 2>&1 &
+	printf '{"state":"running"}'
+)
+
 case "$1" in
 list)
 	cat <<'EOF'
 {
 	"status": {},
+	"setup_status": {},
+	"setup_start": {},
 	"config_get": {},
 	"config_set": { "amap_key": "", "default_speed": 0.0, "max_devices": 0 },
 	"pair_import": { "name": "", "data": "" },
@@ -42,6 +90,8 @@ call)
 	read -r input
 
 	case "$method" in
+	setup_status)    out=$(setup_status) ;;
+	setup_start)     out=$(setup_start) ;;
 	status)          out=$(request "$BASE/api/status") ;;
 	config_get)      out=$(request "$BASE/api/config") ;;
 	config_set)      out=$(request -X POST -H 'Content-Type: application/json' -d "$input" "$BASE/api/config") ;;
