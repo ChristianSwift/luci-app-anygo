@@ -1,0 +1,133 @@
+name: Build IPK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PKG_NAME: luci-app-anygo
+  # PKGARCH=all，用 x86_64 SDK 打一次即可；锁定 24.10 以产出 .ipk
+  SDK_ARCH: x86_64-24.10.8
+
+jobs:
+  build:
+    name: Build luci-app-anygo
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      artifact_version: ${{ steps.meta.outputs.artifact_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve package version
+        id: meta
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            base="$(awk -F':=' '/^PKG_VERSION:=/{print $2; exit}' Makefile | tr -d '[:space:]')"
+            base="${base:-0.0.0}"
+            version="${base}~git.$(git rev-parse --short HEAD)"
+          fi
+          # artifact 名称避免特殊字符
+          artifact_version="${version//\~/-}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "artifact_version=${artifact_version}" >> "$GITHUB_OUTPUT"
+          echo "Building ${PKG_NAME} ${version}"
+
+      - name: Prepare local feed layout
+        run: |
+          set -euo pipefail
+          rm -rf .feed
+          mkdir -p ".feed/${PKG_NAME}"
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.feed' \
+            ./ "./.feed/${PKG_NAME}/"
+
+          # 写入本次构建版本，避免 feed 副本无 git 历史时版本漂移
+          awk -v ver="${{ steps.meta.outputs.version }}" '
+            BEGIN { done=0 }
+            /^PKG_VERSION:=/ && !done {
+              print "PKG_VERSION:=" ver
+              done=1
+              next
+            }
+            { print }
+          ' "./.feed/${PKG_NAME}/Makefile" > "./.feed/${PKG_NAME}/Makefile.tmp"
+          mv "./.feed/${PKG_NAME}/Makefile.tmp" "./.feed/${PKG_NAME}/Makefile"
+
+      - name: Build with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@v11
+        env:
+          ARCH: ${{ env.SDK_ARCH }}
+          FEED_DIR: ${{ github.workspace }}/.feed
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-anygo
+          NO_REFRESH_CHECK: true
+          NO_SHFMT_CHECK: true
+
+      - name: Collect IPK artifacts
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+
+          echo "Built packages:"
+          find bin -type f \( -name '*.ipk' -o -name '*.apk' \) | sort || true
+
+          app_ipk="$(find bin -type f -name 'luci-app-anygo_*.ipk' | sort | head -n 1 || true)"
+          if [[ -z "${app_ipk}" ]]; then
+            echo "luci-app-anygo_*.ipk not found"
+            find bin -type f | sort || true
+            exit 1
+          fi
+
+          cp -f "${app_ipk}" "dist/$(basename "${app_ipk}")"
+          # 稳定文件名，方便下载与文档引用
+          cp -f "${app_ipk}" "dist/luci-app-anygo.ipk"
+
+          # 若有 i18n 一并带上
+          find bin -type f -name 'luci-i18n-anygo-*.ipk' -exec cp -f {} dist/ \; || true
+
+          ls -lah dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-anygo-${{ steps.meta.outputs.artifact_version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: luci-app-anygo-${{ needs.build.outputs.artifact_version }}
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: luci-app-anygo ${{ needs.build.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          make_latest: true
