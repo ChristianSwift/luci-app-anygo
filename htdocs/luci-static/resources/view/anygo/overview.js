@@ -20,6 +20,7 @@ var PI = Math.PI, AXIS = 6378245.0, EE = 0.00669342162296594323;
 var HANGZHOU = [ 30.2741, 120.1551 ];
 var FAVORITES_KEY = 'luci.anygo.favorites';
 var CLICK_TELEPORT_KEY = 'luci.anygo.click-teleport';
+var SELECTED_DEVICES_KEY = 'luci.anygo.selected-devices';
 var MAP_THEME_KEY = 'luci.anygo.map-theme';
 var MAP_THEMES = {
 	day: { style: 'amap://styles/whitesmoke', route: '#007278', outline: '#f4fffc' },
@@ -38,11 +39,23 @@ function readMapTheme() {
 
 function readClickTeleport() {
 	try {
-		return window.localStorage.getItem(CLICK_TELEPORT_KEY) !== 'false';
+		return window.localStorage.getItem(CLICK_TELEPORT_KEY) === 'true';
 	}
 	catch (e) {
-		return true;
+		return false;
 	}
+}
+
+function readSelectedDevices() {
+	try {
+		var saved = JSON.parse(window.localStorage.getItem(SELECTED_DEVICES_KEY));
+		if (Array.isArray(saved) && saved.every(function(udid) {
+			return typeof udid === 'string' && udid.length > 0;
+		}))
+			return new Set(saved);
+	}
+	catch (e) {}
+	return new Set();
 }
 
 function validCoordinates(lat, lon) {
@@ -127,7 +140,7 @@ return view.extend({
 		this.state = {
 			status: status,
 			config: config,
-			selected: new Set((status.devices || []).map(function(d) { return d.udid; })),
+			selected: readSelectedDevices(),
 			panel: 'location',
 			mapTheme: readMapTheme(),
 			routeMode: false,
@@ -197,7 +210,7 @@ return view.extend({
 								])
 							]),
 							E('label', { class: 'anygo-switch' }, [
-								E('span', {}, '点击地图即传送'),
+								E('span', {}, '点击地图或收藏即传送'),
 								E('input', {
 									id: 'anygo-click-teleport', type: 'checkbox', role: 'switch',
 									checked: readClickTeleport() ? '' : null,
@@ -322,6 +335,7 @@ return view.extend({
 					state.selected.add(d.udid);
 				else
 					state.selected.delete(d.udid);
+				this.saveSelection();
 				this.updateSelection();
 			}, this) });
 			checkbox.checked = state.selected.has(d.udid);
@@ -369,6 +383,13 @@ return view.extend({
 		var count = this.selectedUuids().length;
 		document.getElementById('anygo-selection').textContent = count ? '已选 ' + count + ' 台' : '';
 		document.getElementById('anygo-pair-remove').disabled = count === 0;
+	},
+
+	saveSelection: function() {
+		try {
+			window.localStorage.setItem(SELECTED_DEVICES_KEY, JSON.stringify(Array.from(this.state.selected)));
+		}
+		catch (e) {}
 	},
 
 	resolveMapTheme: function(panel) {
@@ -475,8 +496,8 @@ return view.extend({
 					self.updatePolyline(false);
 					self.syncRouteInfo();
 				}
-				else if (self.state.panel === 'location' && document.getElementById('anygo-click-teleport').checked) {
-					self.teleport(wgs[0], wgs[1]);
+				else {
+					self.teleportOnClick(wgs[0], wgs[1]);
 				}
 			});
 			self.updatePolyline(true);
@@ -609,6 +630,11 @@ return view.extend({
 		this.teleport(coordinates[0], coordinates[1]);
 	},
 
+	teleportOnClick: function(lat, lon) {
+		if (this.state.panel === 'location' && document.getElementById('anygo-click-teleport').checked)
+			return this.teleport(lat, lon);
+	},
+
 	readFavorites: function() {
 		try {
 			var favorites = JSON.parse(window.localStorage.getItem(FAVORITES_KEY) || '[]');
@@ -642,7 +668,7 @@ return view.extend({
 		}
 		list.replaceChildren.apply(list, favorites.map(L.bind(function(place) {
 			return E('div', { class: 'anygo-favorite-row' }, [
-				common.button(place.name, L.bind(this.previewFavorite, this, place), { class: 'anygo-button anygo-favorite-place' }),
+				common.button(place.name, L.bind(this.handleFavoriteClick, this, place), { class: 'anygo-button anygo-favorite-place' }),
 				common.button('移除', L.bind(this.handleFavoriteRemove, this, place.name), { 'aria-label': '移除收藏 ' + place.name })
 			]);
 		}, this)));
@@ -671,6 +697,11 @@ return view.extend({
 		var favorites = this.readFavorites().filter(function(place) { return place.name !== name; });
 		if (this.writeFavorites(favorites))
 			common.notify('已移除收藏', 'success');
+	},
+
+	handleFavoriteClick: function(place) {
+		this.previewFavorite(place);
+		return this.teleportOnClick(place.lat, place.lon);
 	},
 
 	previewFavorite: function(place) {
@@ -824,6 +855,8 @@ return view.extend({
 					throw new Error((res && (res.detail || res.error)) || '导入失败');
 				common.notify('已导入 ' + res.udid, 'success');
 				this.state.selected.add(res.udid);
+				this.saveSelection();
+				this.state.deviceFingerprint = null;
 				this.refresh();
 			}, this)).catch(function(e) {
 				common.notify('导入失败：' + e, 'danger');
@@ -838,6 +871,8 @@ return view.extend({
 			if (!res || !res.udid)
 				throw new Error((res && (res.detail || res.error)) || 'USB 配对失败');
 			this.state.selected.add(res.udid);
+			this.saveSelection();
+			this.state.deviceFingerprint = null;
 			common.notify('USB 配对完成：' + res.udid, 'success');
 			this.refresh();
 		}, this)).catch(function(e) {
@@ -851,9 +886,15 @@ return view.extend({
 			return common.notify('请先勾选要删除的设备', 'warning');
 		if (!confirm('确定删除所选设备的配对记录？删除后需要重新配对。'))
 			return;
-		Promise.all(udids.map(function(u) { return callPairDelete(u); })).then(L.bind(function() {
-			udids.forEach(function(u) { this.state.selected.delete(u); }, this);
-			common.notify('已删除', 'success');
+		Promise.allSettled(udids.map(function(u) { return callPairDelete(u); })).then(L.bind(function(results) {
+			var removed = results.filter(function(result, index) {
+				if (result.status !== 'fulfilled' || !result.value || !result.value.ok)
+					return false;
+				this.state.selected.delete(udids[index]);
+				return true;
+			}, this).length;
+			this.saveSelection();
+			common.notify(removed === udids.length ? '已删除' : '部分或全部配对移除失败', removed === udids.length ? 'success' : 'danger');
 			this.refresh();
 		}, this));
 	}
